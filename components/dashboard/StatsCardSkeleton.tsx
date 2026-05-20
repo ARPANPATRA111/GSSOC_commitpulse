@@ -1,6 +1,9 @@
 'use client';
 
 export default function StatsCardSkeleton() {
+  // Deterministic heights - no Math.random()
+  const heights = [24, 32, 18, 45, 38, 52, 28, 42, 35, 48, 30, 22];
+
   return (
     <div className="p-6 rounded-xl bg-[#0a0a0a] border border-[rgba(255,255,255,0.08)] overflow-hidden">
       <div className="flex justify-between items-start mb-6">
@@ -12,13 +15,10 @@ export default function StatsCardSkeleton() {
         <div className="h-9 w-9 rounded-lg shimmer" />
       </div>
 
+      {/* Micro chart skeleton with deterministic heights */}
       <div className="w-full h-8 flex items-end justify-between gap-px opacity-30">
-        {Array.from({ length: 12 }).map((_, i) => (
-          <div 
-            key={i} 
-            className="flex-1 shimmer rounded-t-[1px]" 
-            style={{ height: `${Math.random() * 60 + 10}%` }} 
-          />
+        {heights.map((h, i) => (
+          <div key={i} className="flex-1 shimmer rounded-t-[1px]" style={{ height: `${h}%` }} />
         ))}
       </div>
     </div>
