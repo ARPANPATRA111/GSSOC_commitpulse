@@ -812,6 +812,50 @@ describe('GitHub API cache behavior', () => {
     expect(results.map((result) => result.totalContributions)).toEqual([42, 42, 42]);
   });
 
+  it('dedupes rapid synchronous contribution requests until the delayed fetch resolves once', async () => {
+    vi.useFakeTimers();
+    const resolveFetchSpy = vi.fn();
+
+    vi.mocked(fetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(() => {
+            resolveFetchSpy();
+            resolve(
+              mockResponse({
+                data: {
+                  user: {
+                    contributionsCollection: { contributionCalendar: mockCalendar },
+                  },
+                },
+              })
+            );
+          }, 250);
+        })
+    );
+
+    const requests = [
+      fetchGitHubContributions('octocat'),
+      fetchGitHubContributions('octocat'),
+      fetchGitHubContributions('octocat'),
+    ];
+
+    await Promise.resolve();
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(resolveFetchSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(249);
+    expect(resolveFetchSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const results = await Promise.all(requests);
+
+    expect(resolveFetchSpy).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.totalContributions)).toEqual([42, 42, 42]);
+  });
+
   it('refresh bypass: bypassCache=true forces a fresh fetch', async () => {
     vi.mocked(fetch).mockImplementation(async () =>
       mockResponse({
