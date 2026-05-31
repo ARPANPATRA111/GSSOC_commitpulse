@@ -19,6 +19,12 @@ export class TTLCache<T> {
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private readonly maxSize?: number;
 
+  private static assertValidKey(key: unknown): asserts key is string {
+    if (typeof key !== 'string') {
+      throw new TypeError('Cache key must be a string');
+    }
+  }
+
   /**
    * Creates a new TTL cache instance.
    *
@@ -62,6 +68,8 @@ export class TTLCache<T> {
    * const user = cache.get("user:1");
    */
   get(key: string): T | null {
+    TTLCache.assertValidKey(key);
+
     const hit = this.store.get(key);
     if (!hit) return null;
 
@@ -87,6 +95,8 @@ export class TTLCache<T> {
    * }
    */
   has(key: string): boolean {
+    TTLCache.assertValidKey(key);
+
     const hit = this.store.get(key);
     if (!hit) return false;
 
@@ -109,6 +119,8 @@ export class TTLCache<T> {
    * cache.delete("user:1");
    */
   delete(key: string): boolean {
+    TTLCache.assertValidKey(key);
+
     return this.store.delete(key);
   }
 
@@ -126,7 +138,25 @@ export class TTLCache<T> {
    * @example
    * cache.set("user:1", userData, 5000);
    */
+  /**
+   * Updates the value of an existing, non-expired cache entry without resetting its TTL.
+   *
+   * @param key - Cache key.
+   * @param value - New value to store.
+   * @returns `true` if the entry existed and was updated, `false` if missing or expired.
+   */
+  update(key: string, value: T): boolean {
+    TTLCache.assertValidKey(key);
+
+    const hit = this.store.get(key);
+    if (!hit || Date.now() > hit.expiresAt) return false;
+    hit.value = value;
+    return true;
+  }
+
   set(key: string, value: T, ttlMs: number): void {
+    TTLCache.assertValidKey(key);
+    if (key === '') throw new Error('Cache key cannot be empty');
     if (ttlMs <= 0) throw new RangeError(`ttlMs must be positive, got ${ttlMs}`);
 
     const maxSize = this.maxSize;
@@ -301,6 +331,34 @@ export class DistributedCache<T> {
       return value !== null;
     } catch {
       return false;
+    }
+  }
+
+  async update(key: string, value: T): Promise<boolean> {
+    const updated = this.localCache.update(key, value);
+    if (!updated) return false;
+
+    if (!this.useRedis) {
+      return true;
+    }
+
+    try {
+      const res = await fetch(`${this.redisUrl}/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.redisToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(['SET', key, JSON.stringify(value), 'KEEPTTL']),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Redis HTTP error: ${res.status}`);
+      }
+      return true;
+    } catch (err) {
+      console.error(`[DistributedCache] UPDATE failed for key "${key}":`, err);
+      return true;
     }
   }
 

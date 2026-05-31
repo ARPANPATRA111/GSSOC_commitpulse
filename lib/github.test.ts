@@ -4,6 +4,7 @@ import {
   fetchWithRetry,
   fetchUserProfile,
   fetchUserRepos,
+  fetchContributedRepos,
   getFullDashboardData,
   generateAchievements,
   buildCommitClock,
@@ -11,11 +12,15 @@ import {
   GITHUB_CACHE_TTL_MS,
   validateGitHubUsername,
   cacheKey,
-  buildInsights,
   displayName,
   fetchOrgMembers,
   getOrgDashboardData,
   getWrappedData,
+  computeDeveloperScore,
+  buildProfileData,
+  aggregateLanguages,
+  buildInsights,
+  buildActivityMap,
 } from './github';
 import type { ContributionCalendar } from '../types';
 
@@ -116,6 +121,57 @@ describe('fetchWithRetry', () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  it('retries when the internal request timeout aborts fetch', async () => {
+    vi.mocked(fetch)
+      .mockImplementationOnce(
+        (_url: RequestInfo | URL, options?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Timed out', 'AbortError')),
+              { once: true }
+            );
+          })
+      )
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+    const promise = fetchWithRetry('https://api.github.com/test', {}, 0, 100);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(500);
+
+    const res = await promise;
+    expect(res.status).toBe(200);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws a timeout error after internal timeout retries are exhausted', async () => {
+    vi.mocked(fetch).mockImplementation(
+      (_url: RequestInfo | URL, options?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('Timed out', 'AbortError')),
+            { once: true }
+          );
+        })
+    );
+
+    const promise = fetchWithRetry('https://api.github.com/test', {}, 0, 100);
+    const expectation = expect(promise).rejects.toThrow('GitHub API request timed out after 0.1s');
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expectation;
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
   it('retries on 429 with numeric retry-after', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'retry-after': '2' } }))
@@ -165,13 +221,16 @@ describe('fetchGitHubContributions', () => {
       mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       })
     );
 
-    const result = await fetchGitHubContributions('octocat');
+    const { calendar: result } = await fetchGitHubContributions('octocat');
 
     expect(result.totalContributions).toBe(mockCalendar.totalContributions);
     expect(result.weeks[0].contributionDays[0].contributionCount).toBe(3);
@@ -182,7 +241,10 @@ describe('fetchGitHubContributions', () => {
       mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       })
@@ -212,7 +274,10 @@ describe('fetchGitHubContributions', () => {
       mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       })
@@ -252,7 +317,7 @@ describe('fetchGitHubContributions', () => {
       })
     );
 
-    const result = await fetchGitHubContributions('new-user');
+    const { calendar: result } = await fetchGitHubContributions('new-user');
 
     expect(result.totalContributions).toBe(0);
     expect(result.weeks).toHaveLength(0);
@@ -315,6 +380,52 @@ describe('fetchGitHubContributions', () => {
     );
   });
 
+  // GitHub GraphQL returns HTTP 200 for rate limit errors — the error lives in the body.
+  // fetchGraphQLWithRetry must detect it and back off, not crash immediately.
+  describe('body-level RATE_LIMITED retry (HTTP 200)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('retries with backoff when GitHub returns RATE_LIMITED inside a 200 OK body', async () => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(
+          mockResponse({ errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] })
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            data: { user: { contributionsCollection: { contributionCalendar: mockCalendar } } },
+          })
+        );
+
+      const promise = fetchGitHubContributions('octocat');
+      await vi.advanceTimersByTimeAsync(500);
+      const { calendar: result } = await promise;
+
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(result.totalContributions).toBe(mockCalendar.totalContributions);
+    });
+
+    it('throws after exhausting all retries on repeated body-level RATE_LIMITED errors', async () => {
+      vi.mocked(fetch).mockResolvedValue(
+        mockResponse({ errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] })
+      );
+
+      const promise = fetchGitHubContributions('octocat');
+      // Register the rejection handler before advancing timers so the rejection
+      // is never "unhandled" during the timer callbacks.
+      const assertion = expect(promise).rejects.toThrow('API Rate Limit Exceeded');
+      // 500ms + 1000ms + 2000ms covers all 3 retry delays before attempt >= MAX_RETRIES
+      await vi.advanceTimersByTimeAsync(3500);
+      await assertion;
+      expect(fetch).toHaveBeenCalledTimes(4);
+    });
+  });
+
   it('throws a descriptive "user not found" error when the username does not exist on GitHub', async () => {
     vi.mocked(fetch).mockResolvedValue(mockResponse({ data: { user: null } }));
 
@@ -345,7 +456,7 @@ describe('fetchGitHubContributions', () => {
       })
     );
 
-    const result = await fetchGitHubContributions('sparse-user');
+    const { calendar: result } = await fetchGitHubContributions('sparse-user');
     expect(result.totalContributions).toBe(0);
     expect(result.weeks).toHaveLength(1);
   });
@@ -372,8 +483,8 @@ describe('fetchGitHubContributions', () => {
     const r2 = await fetchGitHubContributions('empty-user', {
       bypassCache: true,
     });
-    expect(r1.totalContributions).toBe(r2.totalContributions);
-    expect(r1.weeks).toEqual(r2.weeks);
+    expect(r1.calendar.totalContributions).toBe(r2.calendar.totalContributions);
+    expect(r1.calendar.weeks).toEqual(r2.calendar.weeks);
   });
 });
 
@@ -453,6 +564,27 @@ describe('fetchUserRepos', () => {
     );
     const result = await fetchUserRepos('octocat');
     expect(result[0].stargazers_count).toBe(1);
+  });
+
+  it('returns a full three-repo payload with the expected star counts and languages', async () => {
+    const mockedRepos = [
+      { stargazers_count: 7, language: 'TypeScript' },
+      { stargazers_count: 42, language: 'Rust' },
+      { stargazers_count: 128, language: 'JavaScript' },
+    ];
+
+    vi.mocked(fetch).mockResolvedValue(mockResponse(mockedRepos));
+
+    const result = await fetchUserRepos('octocat', { bypassCache: true });
+
+    expect(result).toHaveLength(3);
+    result.forEach((repo, index) => {
+      expect(repo).toHaveProperty('stargazers_count');
+      expect(repo).toHaveProperty('language');
+      expect(repo.stargazers_count).toBe(mockedRepos[index].stargazers_count);
+      expect(repo.language).toBe(mockedRepos[index].language);
+    });
+    expect(result).toEqual(mockedRepos);
   });
 
   it('encodes the username before using it in the REST repos path', async () => {
@@ -562,6 +694,328 @@ describe('fetchUserRepos', () => {
   });
 });
 
+describe('fetchContributedRepos', () => {
+  beforeEach(() => vi.spyOn(global, 'fetch'));
+  afterEach(() => vi.restoreAllMocks());
+
+  it('returns contributed repos on success', async () => {
+    const mockNodes = [
+      {
+        name: 'repo1',
+        nameWithOwner: 'owner/repo1',
+        stargazerCount: 10,
+        forkCount: 5,
+        primaryLanguage: { name: 'TypeScript' },
+        updatedAt: '2024-01-01T00:00:00Z',
+      },
+    ];
+
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({
+        data: {
+          user: {
+            repositoriesContributedTo: {
+              nodes: mockNodes,
+            },
+          },
+        },
+      })
+    );
+
+    const result = await fetchContributedRepos('octocat');
+    expect(result).toEqual(mockNodes);
+  });
+
+  it('returns empty array when fetch fails', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 500 }));
+    const result = await fetchContributedRepos('octocat');
+    expect(result).toEqual([]);
+  });
+
+  it('returns empty array if data structure is missing', async () => {
+    vi.mocked(fetch).mockResolvedValue(mockResponse({ data: null }));
+    const result = await fetchContributedRepos('octocat');
+    expect(result).toEqual([]);
+  });
+});
+
+describe('computeDeveloperScore', () => {
+  it('returns 0 for a brand new account with no activity', () => {
+    expect(
+      computeDeveloperScore({
+        repos: 0,
+        followers: 0,
+        stars: 0,
+        contributions: 0,
+        longestStreak: 0,
+      })
+    ).toBe(0);
+  });
+
+  it('caps the score at 100 for an extremely active account', () => {
+    expect(
+      computeDeveloperScore({
+        repos: 999,
+        followers: 999,
+        stars: 999,
+        contributions: 99999,
+        longestStreak: 999,
+      })
+    ).toBe(100);
+  });
+
+  it('saturates each factor independently at its ceiling', () => {
+    expect(
+      computeDeveloperScore({
+        repos: 50,
+        followers: 50,
+        stars: 100,
+        contributions: 400,
+        longestStreak: 50,
+      })
+    ).toBe(100);
+  });
+
+  it('computes a partial score correctly when only repos and followers are non-zero', () => {
+    expect(
+      computeDeveloperScore({
+        repos: 10,
+        followers: 20,
+        stars: 0,
+        contributions: 0,
+        longestStreak: 0,
+      })
+    ).toBe(15);
+  });
+
+  it('rounds fractional scores to the nearest integer', () => {
+    expect(
+      computeDeveloperScore({
+        repos: 1,
+        followers: 0,
+        stars: 0,
+        contributions: 0,
+        longestStreak: 0,
+      })
+    ).toBe(1);
+  });
+});
+
+describe('buildProfileData', () => {
+  const baseProfile = {
+    login: 'octocat',
+    name: 'The Octocat',
+    avatar_url: 'https://example.com/avatar.png',
+    public_repos: 10,
+    followers: 20,
+    following: 5,
+    created_at: '2020-06-01T00:00:00Z',
+    bio: 'Hello world',
+    location: 'San Francisco',
+    plan: { name: 'pro' },
+  };
+
+  it('maps all fields from the raw profile correctly', () => {
+    const result = buildProfileData(baseProfile, 42, 75);
+
+    expect(result.username).toBe('octocat');
+    expect(result.name).toBe('The Octocat');
+    expect(result.avatarUrl).toBe('https://example.com/avatar.png');
+    expect(result.isPro).toBe(true);
+    expect(result.bio).toBe('Hello world');
+    expect(result.location).toBe('San Francisco');
+    expect(result.developerScore).toBe(75);
+    expect(result.stats.stars).toBe(42);
+    expect(result.stats.repositories).toBe(10);
+    expect(result.stats.followers).toBe(20);
+    expect(result.stats.following).toBe(5);
+  });
+
+  it('falls back to login when name is null', () => {
+    const result = buildProfileData({ ...baseProfile, name: null }, 0, 0);
+    expect(result.name).toBe('octocat');
+  });
+
+  it('falls back to login when name is an empty string', () => {
+    const result = buildProfileData({ ...baseProfile, name: '   ' }, 0, 0);
+    expect(result.name).toBe('octocat');
+  });
+
+  it('uses default bio when bio is null', () => {
+    const result = buildProfileData({ ...baseProfile, bio: null }, 0, 0);
+    expect(result.bio).toBe('No bio available');
+  });
+
+  it('uses default location when location is null', () => {
+    const result = buildProfileData({ ...baseProfile, location: null }, 0, 0);
+    expect(result.location).toBe('Earth');
+  });
+
+  it('sets isPro to false when plan is absent', () => {
+    const result = buildProfileData({ ...baseProfile, plan: null }, 0, 0);
+    expect(result.isPro).toBe(false);
+  });
+
+  it('sets isPro to false when plan name is not "pro"', () => {
+    const result = buildProfileData({ ...baseProfile, plan: { name: 'free' } }, 0, 0);
+    expect(result.isPro).toBe(false);
+  });
+
+  it('formats joinedDate as "MMM YYYY" from an ISO created_at string', () => {
+    const result = buildProfileData({ ...baseProfile, created_at: '2020-01-15T00:00:00Z' }, 0, 0);
+    expect(result.joinedDate).toMatch(/^[A-Za-z]+ \d{4}$/);
+  });
+});
+
+describe('aggregateLanguages', () => {
+  it('returns an empty array when no repos have a language set', () => {
+    expect(aggregateLanguages([{ language: null }, { language: null }])).toEqual([]);
+  });
+
+  it('returns an empty array for an empty repo list', () => {
+    expect(aggregateLanguages([])).toEqual([]);
+  });
+
+  it('computes percentages and sorts by frequency descending', () => {
+    const repos = [{ language: 'TypeScript' }, { language: 'TypeScript' }, { language: 'Rust' }];
+    const result = aggregateLanguages(repos);
+
+    expect(result[0].name).toBe('TypeScript');
+    expect(result[0].percentage).toBe(67);
+    expect(result[1].name).toBe('Rust');
+    expect(result[1].percentage).toBe(33);
+  });
+
+  it('caps results at the top 5 languages', () => {
+    const repos = ['TypeScript', 'Rust', 'Go', 'Python', 'Java', 'C++'].map((language) => ({
+      language,
+    }));
+    expect(aggregateLanguages(repos)).toHaveLength(5);
+  });
+
+  it('assigns a fallback color for languages not in LANGUAGE_COLORS', () => {
+    const result = aggregateLanguages([{ language: 'BrainfuckLang9000' }]);
+    expect(result[0].color).toBe('#a855f7');
+  });
+
+  it('skips repos with null language without crashing', () => {
+    const repos = [{ language: 'TypeScript' }, { language: null }, { language: 'TypeScript' }];
+    const result = aggregateLanguages(repos);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('TypeScript');
+  });
+});
+
+describe('buildInsights', () => {
+  const baseStreak = { totalContributions: 120, currentStreak: 0, longestStreak: 14 };
+
+  it('always returns exactly 3 insight cards', () => {
+    const result = buildInsights(baseStreak, [{ name: 'TypeScript' }]);
+    expect(result).toHaveLength(3);
+  });
+
+  it('card 1 includes the total contribution count', () => {
+    const result = buildInsights({ ...baseStreak, totalContributions: 42 }, []);
+    expect(result[0].text).toContain('42');
+  });
+
+  it('card 2 shows the top language name', () => {
+    const result = buildInsights(baseStreak, [{ name: 'Rust' }, { name: 'Go' }]);
+    expect(result[1].text).toContain('Rust');
+  });
+
+  it('card 2 falls back to "Unknown" when languages array is empty', () => {
+    const result = buildInsights(baseStreak, []);
+    expect(result[1].text).toContain('Unknown');
+  });
+
+  it('card 3 shows active streak copy when currentStreak is above 3', () => {
+    const result = buildInsights({ ...baseStreak, currentStreak: 10 }, []);
+    expect(result[2].icon).toBe('Zap');
+    expect(result[2].text).toContain('10');
+  });
+
+  it('card 3 shows longest streak copy when currentStreak is 3 or below', () => {
+    const result = buildInsights({ ...baseStreak, currentStreak: 3, longestStreak: 30 }, []);
+    expect(result[2].icon).toBe('Star');
+    expect(result[2].text).toContain('30');
+  });
+
+  it('card 3 boundary: currentStreak of exactly 3 uses longest-streak copy', () => {
+    const result = buildInsights({ ...baseStreak, currentStreak: 3 }, []);
+    expect(result[2].icon).toBe('Star');
+  });
+
+  it('card 3 boundary: currentStreak of exactly 4 uses active-streak copy', () => {
+    const result = buildInsights({ ...baseStreak, currentStreak: 4 }, []);
+    expect(result[2].icon).toBe('Zap');
+  });
+});
+
+describe('buildActivityMap', () => {
+  it('returns an empty array for no days', () => {
+    expect(buildActivityMap([])).toEqual([]);
+  });
+
+  it('maps intensity 0 for zero contributions', () => {
+    const result = buildActivityMap([{ date: '2024-01-01', contributionCount: 0 }]);
+    expect(result[0].intensity).toBe(0);
+  });
+
+  it('maps intensity 1 for counts 1-3', () => {
+    const results = buildActivityMap([
+      { date: '2024-01-01', contributionCount: 1 },
+      { date: '2024-01-02', contributionCount: 3 },
+    ]);
+    expect(results[0].intensity).toBe(1);
+    expect(results[1].intensity).toBe(1);
+  });
+
+  it('maps intensity 2 for counts 4-6', () => {
+    const results = buildActivityMap([
+      { date: '2024-01-01', contributionCount: 4 },
+      { date: '2024-01-02', contributionCount: 6 },
+    ]);
+    expect(results[0].intensity).toBe(2);
+    expect(results[1].intensity).toBe(2);
+  });
+
+  it('maps intensity 3 for counts 7-10', () => {
+    const results = buildActivityMap([
+      { date: '2024-01-01', contributionCount: 7 },
+      { date: '2024-01-02', contributionCount: 10 },
+    ]);
+    expect(results[0].intensity).toBe(3);
+    expect(results[1].intensity).toBe(3);
+  });
+
+  it('maps intensity 4 for counts above 10', () => {
+    const result = buildActivityMap([{ date: '2024-01-01', contributionCount: 11 }]);
+    expect(result[0].intensity).toBe(4);
+  });
+
+  it('preserves the date and count fields unchanged', () => {
+    const result = buildActivityMap([{ date: '2024-06-15', contributionCount: 5 }]);
+    expect(result[0].date).toBe('2024-06-15');
+    expect(result[0].count).toBe(5);
+  });
+
+  it('covers all five intensity buckets across threshold boundaries', () => {
+    const days = [0, 1, 4, 7, 11].map((n, i) => ({
+      date: `2024-01-0${i + 1}`,
+      contributionCount: n,
+    }));
+    const intensities = buildActivityMap(days).map((d) => d.intensity);
+    expect(intensities).toEqual([0, 1, 2, 3, 4]);
+  });
+  it('passes through locAdditions and locDeletions from the LoC injection step', () => {
+    const day = { date: '2024-01-01', contributionCount: 5, locAdditions: 120, locDeletions: 30 };
+    const result = buildActivityMap([day]);
+    expect(result[0].locAdditions).toBe(120);
+    expect(result[0].locDeletions).toBe(30);
+  });
+});
+
 describe('getFullDashboardData', () => {
   beforeEach(() => vi.spyOn(global, 'fetch'));
   afterEach(() => vi.restoreAllMocks());
@@ -591,7 +1045,19 @@ describe('getFullDashboardData', () => {
       return mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [
+                {
+                  repository: { primaryLanguage: { name: 'TypeScript' } },
+                  contributions: { totalCount: 200 },
+                },
+                {
+                  repository: { primaryLanguage: { name: 'Rust' } },
+                  contributions: { totalCount: 100 },
+                },
+              ],
+            },
           },
         },
       });
@@ -670,7 +1136,10 @@ describe('getFullDashboardData', () => {
       return mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       });
@@ -699,7 +1168,10 @@ describe('getFullDashboardData', () => {
       return mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       });
@@ -769,7 +1241,10 @@ describe('GitHub API cache behavior', () => {
       mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       })
@@ -781,12 +1256,93 @@ describe('GitHub API cache behavior', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('dedupes concurrent contribution requests for the same cold cache key', async () => {
+    let resolveFetch!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const requests = Promise.all([
+      fetchGitHubContributions('octocat'),
+      fetchGitHubContributions('octocat'),
+      fetchGitHubContributions('octocat'),
+    ]);
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+
+    resolveFetch(
+      mockResponse({
+        data: {
+          user: {
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
+          },
+        },
+      })
+    );
+
+    const results = await requests;
+    expect(results.map((result) => result.calendar.totalContributions)).toEqual([42, 42, 42]);
+  });
+
+  it('dedupes rapid synchronous contribution requests until the delayed fetch resolves once', async () => {
+    vi.useFakeTimers();
+    const resolveFetchSpy = vi.fn();
+
+    vi.mocked(fetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(() => {
+            resolveFetchSpy();
+            resolve(
+              mockResponse({
+                data: {
+                  user: {
+                    contributionsCollection: { contributionCalendar: mockCalendar },
+                  },
+                },
+              })
+            );
+          }, 250);
+        })
+    );
+
+    const requests = [
+      fetchGitHubContributions('octocat'),
+      fetchGitHubContributions('octocat'),
+      fetchGitHubContributions('octocat'),
+    ];
+
+    await Promise.resolve();
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(resolveFetchSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(249);
+    expect(resolveFetchSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const results = await Promise.all(requests);
+
+    expect(resolveFetchSpy).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.calendar.totalContributions)).toEqual([42, 42, 42]);
+  });
+
   it('refresh bypass: bypassCache=true forces a fresh fetch', async () => {
     vi.mocked(fetch).mockImplementation(async () =>
       mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       })
@@ -798,7 +1354,7 @@ describe('GitHub API cache behavior', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('cache expiry: expired entry triggers a new fetch', async () => {
+  it('cache expiry: expired entry triggers a delta sync fetch', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
 
@@ -806,7 +1362,10 @@ describe('GitHub API cache behavior', () => {
       mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       })
@@ -818,6 +1377,14 @@ describe('GitHub API cache behavior', () => {
     await fetchGitHubContributions('octocat');
 
     expect(fetch).toHaveBeenCalledTimes(2);
+
+    const secondCallBody = JSON.parse(vi.mocked(fetch).mock.calls[1][1]!.body as string);
+    expect(secondCallBody.variables.from).toBeDefined();
+
+    // Delta sync subtracts 1 day from the last synced date (which was 2026-01-01)
+    const expectedFrom = new Date('2026-01-01T00:00:00.000Z');
+    expectedFrom.setUTCDate(expectedFrom.getUTCDate() - 1);
+    expect(secondCallBody.variables.from).toBe(expectedFrom.toISOString());
   });
 
   it('cache hit: second profile call uses cached value', async () => {
@@ -829,6 +1396,29 @@ describe('GitHub API cache behavior', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('dedupes concurrent profile requests for the same cold cache key', async () => {
+    let resolveFetch!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const requests = Promise.all([
+      fetchUserProfile('octocat'),
+      fetchUserProfile('octocat'),
+      fetchUserProfile('octocat'),
+    ]);
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+
+    resolveFetch(mockResponse({ login: 'octocat', name: 'The Octocat' }));
+
+    const results = await requests;
+    expect(results.map((profile) => profile.login)).toEqual(['octocat', 'octocat', 'octocat']);
+  });
+
   it('refresh bypass: bypassCache=true forces fresh profile fetch', async () => {
     vi.mocked(fetch).mockImplementation(async () =>
       mockResponse({ login: 'octocat', name: 'The Octocat' })
@@ -838,6 +1428,29 @@ describe('GitHub API cache behavior', () => {
     await fetchUserProfile('octocat', { bypassCache: true });
 
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('dedupes concurrent repo requests for the same cold cache key', async () => {
+    let resolveFetch!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const requests = Promise.all([
+      fetchUserRepos('octocat'),
+      fetchUserRepos('octocat'),
+      fetchUserRepos('octocat'),
+    ]);
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+
+    resolveFetch(mockResponse([{ stargazers_count: 7, language: 'TypeScript' }]));
+
+    const results = await requests;
+    expect(results.map((repos) => repos[0]?.stargazers_count)).toEqual([7, 7, 7]);
   });
 
   it('normalizes username casing for cache keys', async () => {
@@ -963,6 +1576,18 @@ describe('cacheKey', () => {
   it('creates key with year', () => {
     expect(cacheKey('contributions', 'DeepSikha', '2025')).toBe('contributions:deepsikha:2025');
   });
+
+  it('creates key with from and to date range', () => {
+    expect(cacheKey('contributions', 'octocat', '2024-01-01', '2024-06-30')).toBe(
+      'contributions:octocat:2024-01-01:2024-06-30'
+    );
+  });
+
+  it('collision test: different to dates produce different keys', () => {
+    const keyA = cacheKey('contributions', 'octocat', '2024-01-01', '2024-06-30');
+    const keyB = cacheKey('contributions', 'octocat', '2024-01-01', '2024-12-31');
+    expect(keyA).not.toBe(keyB);
+  });
 });
 describe('buildInsights', () => {
   it('uses active streak message when current streak > 3', () => {
@@ -1024,6 +1649,15 @@ describe('buildCommitClock', () => {
     expect(result.every((item) => item.commits === 0)).toBe(true);
   });
 
+  it('returns defined dashboard analytics rows when user metric logs are empty', () => {
+    const result = buildCommitClock([]);
+
+    expect(result).toHaveLength(7);
+    expect(result.every((item) => typeof item.day === 'string')).toBe(true);
+    expect(result.every((item) => typeof item.commits === 'number')).toBe(true);
+    expect(result.every((item) => item.commits === 0)).toBe(true);
+  });
+
   it('always returns exactly 7 items', () => {
     const result = buildCommitClock([{ date: '2024-01-07', contributionCount: 1 }]);
 
@@ -1070,6 +1704,17 @@ describe('fetchOrgMembers', () => {
     expect(members[0]).toBe('alice');
     expect(members[1]).toBe('bob');
   });
+
+  it('encodes the organization name before using it in the members REST path', async () => {
+    vi.mocked(fetch).mockResolvedValue(mockResponse([]));
+
+    await fetchOrgMembers('octo/org');
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.github.com/orgs/octo%2Forg/members?per_page=50',
+      expect.objectContaining({ cache: 'no-store' })
+    );
+  });
 });
 
 describe('getOrgDashboardData', () => {
@@ -1097,7 +1742,10 @@ describe('getOrgDashboardData', () => {
       return mockResponse({
         data: {
           user: {
-            contributionsCollection: { contributionCalendar: mockCalendar },
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
           },
         },
       });
@@ -1215,5 +1863,98 @@ describe('getWrappedData', () => {
 
     expect(body.variables.from).toBe('2024-01-01T00:00:00Z');
     expect(body.variables.to).toBe('2024-12-31T23:59:59Z');
+  });
+});
+
+describe('computeDeveloperScore', () => {
+  it('handles all-zero inputs', () => {
+    const score = computeDeveloperScore({
+      repos: 0,
+      followers: 0,
+      stars: 0,
+      contributions: 0,
+      longestStreak: 0,
+    });
+    expect(score).toBe(0);
+  });
+
+  it('calculates perfect 100 for exact saturation threshold values', () => {
+    const score = computeDeveloperScore({
+      repos: 50,
+      followers: 50,
+      stars: 100,
+      contributions: 400,
+      longestStreak: 50,
+    });
+    expect(score).toBe(100);
+  });
+
+  it('clamps the developer score to a maximum of 100 under excess inputs', () => {
+    const score = computeDeveloperScore({
+      repos: 1000,
+      followers: 500,
+      stars: 9999,
+      contributions: 10000,
+      longestStreak: 365,
+    });
+    expect(score).toBe(100);
+  });
+
+  it('correctly calculates developer score under realistic normal values with rounding', () => {
+    const score = computeDeveloperScore({
+      repos: 10, // 10 * 0.5 = 5 pts
+      followers: 8, // 8 * 0.5 = 4 pts
+      stars: 15, // 15 * 0.2 = 3 pts
+      contributions: 120, // 120 / 20 = 6 pts
+      longestStreak: 12, // 12 * 0.2 = 2.4 pts
+    }); // Total = 20.4 -> rounded to 20
+    expect(score).toBe(20);
+  });
+
+  it('handles individual factor saturation caps correctly', () => {
+    // repos saturates at 50 (25 pts), followers saturates at 50 (25 pts)
+    const score = computeDeveloperScore({
+      repos: 100, // Caps at 25 pts
+      followers: 60, // Caps at 25 pts
+      stars: 0,
+      contributions: 0,
+      longestStreak: 0,
+    });
+    expect(score).toBe(50);
+  });
+
+  it('handles small fractional values and rounds to nearest integer correctly', () => {
+    // longestStreak of 3 yields 3 * 0.2 = 0.6 -> rounds to 1
+    expect(
+      computeDeveloperScore({
+        repos: 0,
+        followers: 0,
+        stars: 0,
+        contributions: 0,
+        longestStreak: 3,
+      })
+    ).toBe(1);
+
+    // sum of small fractional parts: 1 repos (0.5) + 1 followers (0.5) + 1 stars (0.2) + 1 contributions (0.05) + 1 longestStreak (0.2) = 1.45 -> rounds to 1
+    expect(
+      computeDeveloperScore({
+        repos: 1,
+        followers: 1,
+        stars: 1,
+        contributions: 1,
+        longestStreak: 1,
+      })
+    ).toBe(1);
+
+    // sum: 1 repos (0.5) + 1 followers (0.5) + 1 stars (0.2) + 1 contributions (0.05) + 2 longestStreak (0.4) = 1.65 -> rounds to 2
+    expect(
+      computeDeveloperScore({
+        repos: 1,
+        followers: 1,
+        stars: 1,
+        contributions: 1,
+        longestStreak: 2,
+      })
+    ).toBe(2);
   });
 });

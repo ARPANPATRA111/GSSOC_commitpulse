@@ -55,7 +55,7 @@ export class RateLimiter {
     if (current === 0) {
       await this.cache.set(ip, 1, this.windowMs);
     } else {
-      await this.cache.set(ip, current + 1, this.windowMs);
+      await this.cache.update(ip, current + 1);
     }
     return true;
   }
@@ -84,7 +84,7 @@ export class RateLimiter {
     if (current === 0) {
       await this.cache.set(ip, 1, this.windowMs);
     } else {
-      await this.cache.set(ip, current + 1, this.windowMs);
+      await this.cache.update(ip, current + 1);
     }
     return {
       success: true,
@@ -106,6 +106,24 @@ export class RateLimiter {
    */
   async reset(ip: string): Promise<void> {
     await this.cache.delete(ip);
+  }
+  /**
+   * Returns the number of remaining requests allowed for a given IP
+   * in the current window.
+   *
+   * Does not consume a request — use `check()` for that.
+   *
+   * @param ip - The IP address to check.
+   * @returns Promise resolving to the number of remaining requests,
+   *          or the full limit if the IP has no recorded requests.
+   *
+   * @example
+   * const left = await rateLimiter.remaining("192.168.1.1");
+   * console.log(`You have ${left} requests left.`);
+   */
+  async remaining(ip: string): Promise<number> {
+    const current = (await this.cache.get(ip)) ?? 0;
+    return Math.max(0, this.limit - current);
   }
 
   allow(ip: string): void {
@@ -172,7 +190,7 @@ export async function rateLimit(
   }
 
   tracker.count++;
-  await trackers.set(ip, tracker, windowMs);
+  await trackers.update(ip, tracker);
 
   if (tracker.count > limit) {
     return {

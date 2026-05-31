@@ -9,6 +9,8 @@ import {
   generateSVG,
   generateMonthlySVG,
   generateVersusSVG,
+  generateHeatmapSVG,
+  generatePulseSVG,
 } from '@/lib/svg/generator';
 import { getSecondsUntilUTCMidnight, getSecondsUntilMidnightInTimezone } from '@/utils/time';
 import type { BadgeParams } from '@/types';
@@ -18,12 +20,8 @@ import { streakParamsSchema } from '@/lib/validations';
 const SVG_CSP_HEADER =
   "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://fonts.gstatic.com;";
 
-// 1. Define a custom Error class for Validation
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ValidationError';
-  }
+function escapeSVGText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function getMonthlyReferenceDate(year: string | undefined, timezone: string): Date | undefined {
@@ -92,6 +90,9 @@ export async function GET(request: Request) {
       versus,
       shading,
       gradient,
+      tz: tzParam,
+      disable_particles,
+      glow,
     } = parseResult.data;
 
     const themeName = theme || 'dark';
@@ -106,16 +107,10 @@ export async function GET(request: Request) {
         ? `${year}-12-31T23:59:59Z`
         : undefined;
 
-    const tzParam = searchParams.get('tz');
     let timezone = 'UTC';
     if (tzParam) {
-      try {
-        timezone = new Intl.DateTimeFormat(undefined, { timeZone: tzParam }).resolvedOptions()
-          .timeZone;
-      } catch {
-        // We throw our new ValidationError here instead of returning directly
-        throw new ValidationError(`Invalid "tz" parameter: "${tzParam}"`);
-      }
+      timezone = new Intl.DateTimeFormat(undefined, { timeZone: tzParam }).resolvedOptions()
+        .timeZone;
     }
 
     const isAutoTheme = themeName === 'auto';
@@ -135,7 +130,7 @@ export async function GET(request: Request) {
     const targetEntity = org || user;
     const borderParam = searchParams.get('border');
     const sanitizedBorder = borderParam ? borderParam.replace(/[^a-fA-F0-9]/g, '') : undefined;
-
+    const animate = searchParams.get('animate') !== 'false';
     const params: BadgeParams = {
       user: targetEntity,
       bg: isAutoTheme ? selectedTheme.bg : bg || selectedTheme.bg,
@@ -165,6 +160,9 @@ export async function GET(request: Request) {
       versus,
       shading,
       gradient,
+      disable_particles,
+      glow,
+      animate,
     };
 
     let calendar;
@@ -179,18 +177,20 @@ export async function GET(request: Request) {
       });
       calendar = orgData.calendar;
     } else {
-      calendar = await fetchGitHubContributions(user, {
+      const userData = await fetchGitHubContributions(user, {
         bypassCache: refresh,
         from,
         to,
       });
+      calendar = userData.calendar;
 
       if (versus) {
-        versusCalendar = await fetchGitHubContributions(versus, {
+        const versusData = await fetchGitHubContributions(versus, {
           bypassCache: refresh,
           from,
           to,
         });
+        versusCalendar = versusData.calendar;
       }
     }
 
@@ -202,6 +202,14 @@ export async function GET(request: Request) {
         getMonthlyReferenceDate(year, timezone)
       );
       svg = generateMonthlySVG(stats, params);
+    } else if (view === 'heatmap') {
+      const stats = calculateStreak(calendar, timezone, undefined, grace);
+      svg = generateHeatmapSVG(stats, params, calendar);
+    } else if (view === 'pulse') {
+      // We still use calculateStreak here to efficiently parse totalContributions for the stat display,
+      // even though the sparkline generator will extract its own daily 30-day timeline below.
+      const stats = calculateStreak(calendar, timezone, undefined, grace);
+      svg = generatePulseSVG(stats, params, calendar);
     } else if (versus && versusCalendar) {
       const stats1 = calculateStreak(calendar, timezone, undefined, grace);
       const stats2 = calculateStreak(versusCalendar, timezone, undefined, grace);
@@ -245,7 +253,8 @@ function buildErrorResponse(error: unknown, parseResult: ParseResult): NextRespo
   const isValidationError =
     (error instanceof Error && error.name === 'ValidationError') ||
     message.toLowerCase().includes('invalid') ||
-    message.toLowerCase().includes('validation');
+    message.toLowerCase().includes('validation') ||
+    message.toLowerCase().includes('strictly for organizations');
 
   const errBg = `#${(parseResult.success && parseResult.data.bg) || '0d1117'}`;
   const errAccent = `#${
@@ -300,7 +309,7 @@ function buildErrorResponse(error: unknown, parseResult: ParseResult): NextRespo
       <svg xmlns="http://www.w3.org/2000/svg" width="400" height="150">
         <rect width="100%" height="100%" fill="#2d0000" rx="8"/>
         <text x="50%" y="50%" text-anchor="middle" fill="#ffcccc" font-family="sans-serif">
-          ${message}
+          ${escapeSVGText(message)}
         </text>
       </svg>
     `;
@@ -332,6 +341,7 @@ function buildErrorResponse(error: unknown, parseResult: ParseResult): NextRespo
     headers: {
       'Content-Type': 'image/svg+xml',
       'Cache-Control': 'no-store',
+      'Content-Security-Policy': SVG_CSP_HEADER,
     },
   });
 }
