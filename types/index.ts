@@ -210,6 +210,7 @@ export interface BadgeParams {
   gradient?: boolean;
 
   disable_particles?: boolean;
+  glow?: boolean;
 }
 
 export interface GraphNode {

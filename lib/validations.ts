@@ -240,6 +240,14 @@ export const streakParamsSchema = z.object({
     .string()
     .optional()
     .transform((val) => val === 'true' || val === '1'),
+  glow: z
+    .string()
+    .optional()
+    .transform((val) => {
+      if (val === undefined) return true;
+      return val === 'true' || val === '1';
+    })
+    .default(true),
 });
 
 export const githubParamsSchema = z.object({

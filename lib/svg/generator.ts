@@ -159,8 +159,13 @@ function renderDefs(sf: number, params: BadgeParams): string {
     }
   }
 
+  const filterGlow =
+    params.glow !== false
+      ? `<filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${fs(5)}" result="blur" /><feComposite in="SourceGraphic" in2="blur" operator="over" /></filter>`
+      : '';
+
   return `<defs>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${fs(5)}" result="blur" /><feComposite in="SourceGraphic" in2="blur" operator="over" /></filter>
+    ${filterGlow}
     ${gradients}
   </defs>`;
 }
@@ -172,15 +177,16 @@ function renderStatsSection(
   params: BadgeParams
 ): string {
   const totalLabel = params.mode === 'loc' ? 'TOTAL LINES OF CODE' : labels.ANNUAL_SYNC_TOTAL;
+  const glowAttr = params.glow !== false ? ' filter="url(#glow)"' : '';
 
   return `
   <g transform="translate(${s(100)}, ${s(340)})" text-anchor="middle">
     <text class="label">${labels.CURRENT_STREAK}</text>
-    <text y="${s(40)}" class="stats" filter="url(#glow)">${stats.currentStreak}</text>
+    <text y="${s(40)}" class="stats"${glowAttr}>${stats.currentStreak}</text>
   </g>
   <g transform="translate(${s(300)}, ${s(340)})" text-anchor="middle">
     <text class="label">${totalLabel}</text>
-    <text y="${s(40)}" class="total-val" filter="url(#glow)">${stats.totalContributions}</text>
+    <text y="${s(40)}" class="total-val"${glowAttr}>${stats.totalContributions}</text>
   </g>
   <g transform="translate(${s(500)}, ${s(340)})" text-anchor="middle">
     <text class="label">${labels.PEAK_STREAK}</text>
@@ -906,6 +912,16 @@ export function generateWrappedSVG(
     ? 'class="cp-accent-stroke" stroke-opacity="0.15" stroke-width="1.5"'
     : borderAttr;
 
+  const filterGlow =
+    params.glow !== false
+      ? `<filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>`
+      : '';
+
+  const glowAttr = params.glow !== false ? ' filter="url(#glow)"' : '';
+
   return `
 <svg
   xmlns="http://www.w3.org/2000/svg"
@@ -917,10 +933,7 @@ export function generateWrappedSVG(
 >
   <title>${safeUser}'s GitHub Wrapped ${year}</title>
   <defs>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3.5" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
+    ${filterGlow}
   </defs>
 
   <style>
@@ -975,7 +988,7 @@ export function generateWrappedSVG(
   </g>
 
   <g transform="translate(25, 120)">
-    <text x="0" y="15" class="total-commits" ${accentClass} filter="url(#glow)">${stats.totalContributions}</text>
+    <text x="0" y="15" class="total-commits" ${accentClass}${glowAttr}>${stats.totalContributions}</text>
     <text x="2" y="38" class="total-label" ${textClass}>TOTAL CONTRIBUTIONS</text>
   </g>
 
@@ -1154,7 +1167,8 @@ function renderHeatmapGrid(
   sf: number,
   todayDate: string,
   mode: 'commits' | 'loc' = 'commits',
-  isAutoTheme: boolean = false
+  isAutoTheme: boolean = false,
+  glow: boolean = true
 ): string {
   const weeks = calendar.weeks.slice(-14);
   const cellSize = Math.round(HEATMAP_CELL_SIZE * sf);
@@ -1202,7 +1216,7 @@ function renderHeatmapGrid(
       const fillAttr = isAutoTheme ? 'fill="var(--cp-accent)"' : `fill="${accent}"`;
 
       // Glow on high-intensity cells
-      const filterAttr = intensity === 4 ? ' filter="url(#hm-glow)"' : '';
+      const filterAttr = intensity === 4 && glow !== false ? ' filter="url(#hm-glow)"' : '';
 
       cells += `
       <rect
@@ -1328,10 +1342,27 @@ export function generateHeatmapSVG(
   const labelFill = isLightBg ? text : accent;
   const labelOpacity = isLightBg ? 0.8 : 0.7;
 
-  const grid = renderHeatmapGrid(calendar, accent, text, sf, stats.todayDate, params.mode, false);
+  const grid = renderHeatmapGrid(
+    calendar,
+    accent,
+    text,
+    sf,
+    stats.todayDate,
+    params.mode,
+    false,
+    params.glow !== false
+  );
   const legend = renderHeatmapLegend(accent, text, sf, s(60), s(270), false);
 
   const unit = params.mode === 'loc' ? 'lines of code' : 'total contributions';
+
+  const filterGlow =
+    params.glow !== false
+      ? `<filter id="hm-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="${Math.round(3 * sf)}" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>`
+      : '';
 
   return `
 <svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img">
@@ -1339,10 +1370,7 @@ export function generateHeatmapSVG(
   <desc>${safeUser} has ${stats.totalContributions} ${unit} and a longest streak of ${stats.longestStreak} days.</desc>
 
   <defs>
-    <filter id="hm-glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="${Math.round(3 * sf)}" result="blur" />
-      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-    </filter>
+    ${filterGlow}
   </defs>
 
   <style>
@@ -1444,10 +1472,27 @@ function generateAutoThemeHeatmapSVG(
   const H = Math.round(300 * sf);
   const s = createScaler(sf);
 
-  const grid = renderHeatmapGrid(calendar, '', '', sf, stats.todayDate, params.mode, true);
+  const grid = renderHeatmapGrid(
+    calendar,
+    '',
+    '',
+    sf,
+    stats.todayDate,
+    params.mode,
+    true,
+    params.glow !== false
+  );
   const legend = renderHeatmapLegend('', '', sf, s(60), s(270), true);
 
   const unit = params.mode === 'loc' ? 'lines of code' : 'total contributions';
+
+  const filterGlow =
+    params.glow !== false
+      ? `<filter id="hm-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="${Math.round(3 * sf)}" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>`
+      : '';
 
   return `
 <svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img">
@@ -1455,10 +1500,7 @@ function generateAutoThemeHeatmapSVG(
   <desc>${safeUser} has ${stats.totalContributions} ${unit} and a longest streak of ${stats.longestStreak} days.</desc>
 
   <defs>
-    <filter id="hm-glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="${Math.round(3 * sf)}" result="blur" />
-      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-    </filter>
+    ${filterGlow}
   </defs>
 
   <style>
