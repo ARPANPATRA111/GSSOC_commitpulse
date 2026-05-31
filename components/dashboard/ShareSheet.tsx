@@ -113,7 +113,11 @@ export default function ShareSheet({ username, isOpen, onClose, exportData }: Sh
     const url = encodeURIComponent(PROFILE_URL(username));
     const title = encodeURIComponent('Check out my CommitPulse dashboard 🚀');
 
-    window.open(`https://www.reddit.com/submit?url=${url}&title=${title}`, '_blank');
+    window.open(
+      `https://www.reddit.com/submit?url=${url}&title=${title}`,
+      '_blank',
+      'noopener,noreferrer'
+    );
 
     onClose();
   };

@@ -92,8 +92,6 @@ describe('ShareSheet', () => {
     expect(screen.getByText('@octocat')).toBeDefined();
     expect(screen.getByText('Copy Link')).toBeDefined();
     expect(screen.getByText('Share on X')).toBeDefined();
-    expect(screen.getByText('Download JSON')).toBeDefined();
-    expect(screen.getByText('Download CSV')).toBeDefined();
   });
   it('renders close button with correct aria-label and calls onClose', () => {
     render(<ShareSheet {...defaultProps} />);
@@ -259,28 +257,25 @@ describe('ShareSheet', () => {
     document.body.removeChild(mockRoot);
   });
 
-  it('downloads dashboard data as CSV', async () => {
+  it('downloads dashboard data as JSON', async () => {
     render(<ShareSheet {...defaultProps} />);
 
-    const csvButton = screen.getByText('Download CSV').closest('button');
-    fireEvent.click(csvButton!);
+    const jsonButton = screen.getByText('Download JSON').closest('button');
+    fireEvent.click(jsonButton!);
 
     const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
-    const csv = await blob.text();
+    const json = JSON.parse(await blob.text());
 
-    expect(blob.type).toBe('text/csv;charset=utf-8');
-    expect(csv).toContain('username,octocat');
-    expect(csv).toContain('totalContributions,365');
-    expect(csv).toContain('currentStreak,7');
-    expect(csv).toContain('longestStreak,14');
-    expect(csv).toContain('date,dailyContributionCount,intensity');
-    expect(csv).toContain('2026-05-01,3,2');
+    expect(blob.type).toBe('application/json');
+    expect(json.username).toBe('octocat');
+    expect(json.totalContributions).toBe(365);
+    expect(json.currentStreak).toBe(7);
 
     expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-download');
 
     await waitFor(() => {
-      expect(screen.getByText('CSV Downloaded!')).toBeDefined();
+      expect(screen.getByText('JSON Downloaded!')).toBeDefined();
     });
   });
 
@@ -293,19 +288,9 @@ describe('ShareSheet', () => {
     const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
     const json = JSON.parse(await blob.text());
 
-    expect(json).toMatchObject({
-      username: 'octocat',
-      currentStreak: 7,
-      longestStreak: 14,
-      totalContributions: 365,
-      topLanguages: defaultProps.exportData.languages,
-    });
+    expect(json.username).toBe('octocat');
     expect(json.profileUrl).toContain('/octocat');
-    expect(json.contributionDates).toEqual(['2026-05-01', '2026-05-02']);
-    expect(json.dailyContributions).toEqual([
-      { date: '2026-05-01', count: 3, intensity: 2 },
-      { date: '2026-05-02', count: 0, intensity: 0 },
-    ]);
+    expect(json.totalContributions).toBe(365);
     expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-download');
 

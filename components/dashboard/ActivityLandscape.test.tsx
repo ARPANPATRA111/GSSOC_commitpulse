@@ -38,7 +38,7 @@ it('has 3M active by default', () => {
 
   const tab = screen.getByText('3M');
 
-  expect(tab.className).toContain('bg-black');
+  expect(tab.className).toContain('bg-zinc-900');
 });
 it('activates 1W tab when clicked', () => {
   render(<ActivityLandscape data={mockData} />);
@@ -47,13 +47,13 @@ it('activates 1W tab when clicked', () => {
 
   fireEvent.click(tab);
 
-  expect(tab.className).toContain('bg-black');
+  expect(tab.className).toContain('bg-zinc-900');
 });
 it('renders activity chart', () => {
   render(<ActivityLandscape data={mockData} />);
 
   expect(screen.getByText('Activity Landscape')).toBeTruthy();
-  expect(screen.getByText('Commit frequency over time')).toBeTruthy();
+  expect(screen.getByText('Commit Intensity')).toBeTruthy();
 });
 it('renders with empty data without crashing', () => {
   render(<ActivityLandscape data={[]} />);

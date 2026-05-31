@@ -5,9 +5,19 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ControlsPanel } from './components/ControlsPanel';
+import { AdvancedSettingsPanel } from './components/AdvancedSettingsPanel';
 import { ExportPanel } from './components/ExportPanel';
-import type { ExportFormat, Scale, BadgeSize } from './types';
-import { getExportSnippet, stripHash } from './utils';
+import type {
+  ExportFormat,
+  Scale,
+  BadgeSize,
+  ViewMode,
+  DeltaFormat,
+  Language,
+  Timezone,
+  Font,
+} from './types';
+import { getExportSnippet, stripHash, buildQueryParams } from './utils';
 import { useTranslation } from '@/context/TranslationContext';
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -39,9 +49,20 @@ function CustomizeContent(): ReactElement {
   const [textHex, setTextHex] = useState('');
   const [scale, setScale] = useState<Scale>('linear');
   const [speed, setSpeed] = useState('8s');
+  const [font, setFont] = useState<Font>('Inter');
   const [year, setYear] = useState('');
   const [radius, setRadius] = useState(8);
   const [size, setSize] = useState<BadgeSize>('medium');
+  const [hideTitle, setHideTitle] = useState(false);
+  const [hideBackground, setHideBackground] = useState(false);
+  const [hideStats, setHideStats] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('default');
+  const [deltaFormat, setDeltaFormat] = useState<DeltaFormat>('percent');
+  const [badgeWidth, setBadgeWidth] = useState<number | ''>('');
+  const [badgeHeight, setBadgeHeight] = useState<number | ''>('');
+  const [grace, setGrace] = useState<number>(1);
+  const [language, setLanguage] = useState<Language>('en');
+  const [timezone, setTimezone] = useState<Timezone>('UTC');
   const [exportFormat, setExportFormat] = useState<ExportFormat>('markdown');
   const [copied, setCopied] = useState(false);
   const [copyStatusMessage, setCopyStatusMessage] = useState('');
@@ -85,52 +106,29 @@ function CustomizeContent(): ReactElement {
     }
   }, []);
 
-  // ── buildQueryParams ──────────────────────────────────────────────────────
-
-  const buildQueryParams = useCallback((): string => {
-    const params = new URLSearchParams();
-
-    if (hasUsername) {
-      params.set('user', trimmedUsername);
-    }
-
-    if (skipsCustomColors) {
-      // Virtual themes always emit theme=<name> and skip custom color params.
-      params.set('theme', theme);
-    } else {
-      const hasCustomColors = bgHex || accentHex || textHex;
-
-      // Custom hex colors take priority over theme
-      if (!hasCustomColors) {
-        params.set('theme', theme);
-      }
-      if (bgHex) params.set('bg', stripHash(bgHex));
-      if (accentHex) params.set('accent', stripHash(accentHex));
-      if (textHex) params.set('text', stripHash(textHex));
-    }
-
-    if (scale !== 'linear') params.set('scale', scale);
-    if (speed !== '8s') params.set('speed', speed);
-    if (year) params.set('year', year);
-    if (radius !== 8) params.set('radius', radius.toString());
-    if (size !== 'medium') params.set('size', size);
-    return params.toString();
-  }, [
-    hasUsername,
-    trimmedUsername,
+  const queryString = buildQueryParams({
+    username,
     theme,
-    skipsCustomColors,
     bgHex,
     accentHex,
     textHex,
     scale,
     speed,
+    font,
     year,
     radius,
     size,
-  ]);
-
-  const queryString = buildQueryParams();
+    hideTitle,
+    hideBackground,
+    hideStats,
+    viewMode,
+    deltaFormat,
+    badgeWidth,
+    badgeHeight,
+    grace,
+    language,
+    timezone,
+  });
   const previewSrc = `/api/streak?${queryString}`;
   const exportSnippet = getExportSnippet(exportFormat, queryString);
 
@@ -224,7 +222,7 @@ function CustomizeContent(): ReactElement {
         </motion.div>
 
         {/* ── Split layout ─────────────────────────────────────────────────── */}
-        <div className="grid lg:grid-cols-[380px_1fr] gap-6 items-start">
+        <div className="grid lg:grid-cols-[380px_1fr] xl:grid-cols-[380px_1fr_380px] gap-6 items-start">
           {/* ════ LEFT: Control Panel ════════════════════════════════════════ */}
           <motion.aside
             initial={{ opacity: 0, x: -20 }}
@@ -370,6 +368,37 @@ function CustomizeContent(): ReactElement {
               </div>
             </div>
           </motion.div>
+
+          {/* ════ RIGHT: Advanced Settings ═══════════════════════════════════ */}
+          <motion.aside
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+            className="bg-white dark:bg-[#0a0a0a] border border-black/10 dark:border-white/5 rounded-[1.75rem] p-6 flex flex-col gap-6 sticky top-6 shadow-sm xl:col-start-3"
+          >
+            <AdvancedSettingsPanel
+              hideTitle={hideTitle}
+              hideBackground={hideBackground}
+              hideStats={hideStats}
+              viewMode={viewMode}
+              deltaFormat={deltaFormat}
+              badgeWidth={badgeWidth}
+              badgeHeight={badgeHeight}
+              grace={grace}
+              language={language}
+              timezone={timezone}
+              onHideTitleChange={setHideTitle}
+              onHideBackgroundChange={setHideBackground}
+              onHideStatsChange={setHideStats}
+              onViewModeChange={setViewMode}
+              onDeltaFormatChange={setDeltaFormat}
+              onBadgeWidthChange={setBadgeWidth}
+              onBadgeHeightChange={setBadgeHeight}
+              onGraceChange={setGrace}
+              onLanguageChange={setLanguage}
+              onTimezoneChange={setTimezone}
+            />
+          </motion.aside>
         </div>
       </div>
     </div>

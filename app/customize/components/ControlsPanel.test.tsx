@@ -101,7 +101,7 @@ describe('ControlsPanel Component', () => {
   it('calls onScaleChange with log', () => {
     render(<ControlsPanel {...defaultProps} />);
 
-    const logButton = screen.getByText(/Logarithmic/i);
+    const logButton = screen.getByRole('button', { name: /Logarithmic/i });
 
     fireEvent.click(logButton);
 
@@ -111,12 +111,12 @@ describe('ControlsPanel Component', () => {
   it('hides Clear overrides button initially', () => {
     render(<ControlsPanel {...defaultProps} />);
 
-    expect(screen.queryByText(/Clear overrides/i)).toBeNull();
+    expect(screen.queryByText(/Clear Custom Colors/i)).toBeNull();
   });
 
   it('shows Clear overrides button when bgHex is provided', () => {
     render(<ControlsPanel {...defaultProps} bgHex="#000000" />);
 
-    expect(screen.getByText(/Clear overrides/i)).toBeTruthy();
+    expect(screen.getByText(/Clear Custom Colors/i)).toBeTruthy();
   });
 });
