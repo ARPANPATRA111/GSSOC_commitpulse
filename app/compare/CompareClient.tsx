@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Radar,
@@ -33,7 +33,16 @@ import {
   Code2,
   GitPullRequest,
   CircleDot,
+  Cpu,
+  RefreshCw,
+  Component,
+  Users as UsersIcon,
+  CalendarDays,
+  Tent,
+  Camera,
+  Share2,
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
 
 /* ── types ────────────────────────────────────────────────────────────── */
 
@@ -791,9 +800,41 @@ export default function CompareClient() {
 
   const [user1, setUser1] = useState(searchParams.get('user1') || '');
   const [user2, setUser2] = useState(searchParams.get('user2') || '');
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const [data, setData] = useState<CompareResponse | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+
+  const captureRef = useRef<HTMLDivElement>(null);
+
+  const handleDownloadCard = async () => {
+    if (!captureRef.current || !data) return;
+    setIsExporting(true);
+
+    try {
+      // Small delay to allow export overlay/scanning UI to render first
+      await new Promise((res) => setTimeout(res, 300));
+
+      const canvas = await html2canvas(captureRef.current, {
+        scale: 2, // higher resolution
+        backgroundColor: document.documentElement.classList.contains('dark')
+          ? '#000000'
+          : '#ffffff',
+        useCORS: true,
+        logging: false,
+      });
+
+      const image = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = image;
+      link.download = `commitpulse-battle-${data.user1.profile.username}-vs-${data.user2.profile.username}.png`;
+      link.click();
+    } catch (err) {
+      console.error('Failed to export image', err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const BASE_URL =
     typeof window !== 'undefined' ? window.location.origin : 'https://commitpulse.vercel.app';
@@ -973,169 +1014,225 @@ export default function CompareClient() {
         <AnimatePresence>
           {d1 && d2 && !loading && (
             <motion.div
+              ref={captureRef}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="space-y-8"
+              className="space-y-8 relative pb-20"
             >
-              {/* Winner Banner */}
-              {winner && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.2 }}
-                  className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-500/20 bg-emerald-50 dark:bg-emerald-500/10 text-center"
-                >
-                  <div className="flex items-center justify-center gap-2">
-                    <Trophy size={18} className="text-emerald-500" />
-                    <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
-                      {winner === 'tie'
-                        ? "It's a Tie! Both developers are evenly matched."
-                        : `@${winner} wins the showdown!`}
-                    </span>
-                  </div>
-                </motion.div>
-              )}
-
-              {/* Profile Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
-                <CompareProfileCard profile={d1.profile} stats={d1.stats} side="left" />
-
-                {/* VS Divider */}
-                <div className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
-                  <div className="w-12 h-12 rounded-full bg-white dark:bg-[#0a0a0a] border-2 border-emerald-500/30 flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.2)]">
-                    <span className="text-xs font-bold text-emerald-500 tracking-wider">VS</span>
-                  </div>
-                </div>
-
-                <CompareProfileCard profile={d2.profile} stats={d2.stats} side="right" />
+              {/* Optional: Spotify Wrapped style header only visible in the canvas or just part of the card */}
+              <div className="absolute top-0 right-0 opacity-10 pointer-events-none overflow-hidden w-full h-full z-0 flex items-center justify-center">
+                <Swords size={400} className="text-emerald-500 blur-3xl" />
               </div>
 
-              {/* Stats Battle Grid */}
-              <div>
-                <h2 className="text-xs text-[#A1A1AA] uppercase tracking-widest font-medium mb-4">
-                  Stats Showdown
-                </h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <StatBattle
-                    label="Current Streak"
-                    icon={Flame}
-                    valueA={d1.stats.currentStreak}
-                    valueB={d2.stats.currentStreak}
-                  />
-                  <StatBattle
-                    label="Peak Streak"
-                    icon={TrendingUp}
-                    valueA={d1.stats.peakStreak}
-                    valueB={d2.stats.peakStreak}
-                  />
-                  <StatBattle
-                    label="Total Contributions"
-                    icon={GitCommit}
-                    valueA={d1.stats.totalContributions}
-                    valueB={d2.stats.totalContributions}
-                  />
-                  <StatBattle
-                    label="Repositories"
-                    icon={GitBranch}
-                    valueA={d1.profile.stats.repositories}
-                    valueB={d2.profile.stats.repositories}
-                  />
-                  <StatBattle
-                    label="Stars"
-                    icon={Star}
-                    valueA={d1.profile.stats.stars}
-                    valueB={d2.profile.stats.stars}
-                  />
-                  <StatBattle
-                    label="Followers"
-                    icon={Users}
-                    valueA={d1.profile.stats.followers}
-                    valueB={d2.profile.stats.followers}
-                  />
-                  <StatBattle
-                    label="Pull Requests"
-                    icon={GitPullRequest}
-                    valueA={d1.stats.totalPRs || 0}
-                    valueB={d2.stats.totalPRs || 0}
-                  />
-                  <StatBattle
-                    label="Issues"
-                    icon={CircleDot}
-                    valueA={d1.stats.totalIssues || 0}
-                    valueB={d2.stats.totalIssues || 0}
-                  />
-                </div>
-              </div>
-
-              {/* Coding Habits Showdown */}
-              <CodingHabitShowdown user1={d1} user2={d2} />
-
-              {/* Code Volume Showdown */}
-              <CodeVolumeShowdown user1={d1} user2={d2} />
-
-              {/* Developer Skills Radar */}
-              <DeveloperSkillsRadar user1={d1} user2={d2} />
-
-              {/* Language Comparison */}
-              <LanguageComparison
-                langsA={d1.languages}
-                langsB={d2.languages}
-                nameA={d1.profile.username}
-                nameB={d2.profile.username}
-              />
-
-              {/* Activity Heatmaps */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {[
-                  { user: d1, side: 'left' as const },
-                  { user: d2, side: 'right' as const },
-                ].map(({ user, side }) => (
+              <div className="relative z-10 space-y-8">
+                {/* Winner Banner */}
+                {winner && (
                   <motion.div
-                    key={side}
-                    initial={{ opacity: 0, y: 12 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true }}
-                    className="p-5 rounded-xl bg-white dark:bg-[#0a0a0a] border border-black/10 dark:border-[rgba(255,255,255,0.08)]"
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.2 }}
+                    className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-500/20 bg-emerald-50 dark:bg-emerald-500/10 text-center"
                   >
-                    <h3 className="text-xs text-[#A1A1AA] uppercase tracking-widest font-medium mb-3">
-                      {user.profile.username}&apos;s Activity (Last 13 Weeks)
-                    </h3>
-                    <MiniHeatmap activity={user.activity} />
+                    <div className="flex items-center justify-center gap-2">
+                      <Trophy size={18} className="text-emerald-500" />
+                      <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+                        {winner === 'tie'
+                          ? "It's a Tie! Both developers are evenly matched."
+                          : `@${winner} wins the showdown!`}
+                      </span>
+                    </div>
                   </motion.div>
-                ))}
-              </div>
+                )}
 
-              {/* 3D Monolith Embeds */}
-              <div>
-                <h2 className="text-xs text-[#A1A1AA] uppercase tracking-widest font-medium mb-4">
-                  3D Monolith Comparison
-                </h2>
+                {/* Profile Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+                  <CompareProfileCard profile={d1.profile} stats={d1.stats} side="left" />
+
+                  {/* VS Divider */}
+                  <div className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+                    <div className="w-12 h-12 rounded-full bg-white dark:bg-[#0a0a0a] border-2 border-emerald-500/30 flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.2)]">
+                      <span className="text-xs font-bold text-emerald-500 tracking-wider">VS</span>
+                    </div>
+                  </div>
+
+                  <CompareProfileCard profile={d2.profile} stats={d2.stats} side="right" />
+                </div>
+
+                {/* Stats Battle Grid */}
+                <div>
+                  <h2 className="text-xs text-[#A1A1AA] uppercase tracking-widest font-medium mb-4">
+                    Stats Showdown
+                  </h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <StatBattle
+                      label="Current Streak"
+                      icon={Flame}
+                      valueA={d1.stats.currentStreak}
+                      valueB={d2.stats.currentStreak}
+                    />
+                    <StatBattle
+                      label="Peak Streak"
+                      icon={TrendingUp}
+                      valueA={d1.stats.peakStreak}
+                      valueB={d2.stats.peakStreak}
+                    />
+                    <StatBattle
+                      label="Total Contributions"
+                      icon={GitCommit}
+                      valueA={d1.stats.totalContributions}
+                      valueB={d2.stats.totalContributions}
+                    />
+                    <StatBattle
+                      label="Repositories"
+                      icon={GitBranch}
+                      valueA={d1.profile.stats.repositories}
+                      valueB={d2.profile.stats.repositories}
+                    />
+                    <StatBattle
+                      label="Stars"
+                      icon={Star}
+                      valueA={d1.profile.stats.stars}
+                      valueB={d2.profile.stats.stars}
+                    />
+                    <StatBattle
+                      label="Followers"
+                      icon={Users}
+                      valueA={d1.profile.stats.followers}
+                      valueB={d2.profile.stats.followers}
+                    />
+                    <StatBattle
+                      label="Pull Requests"
+                      icon={GitPullRequest}
+                      valueA={d1.stats.totalPRs || 0}
+                      valueB={d2.stats.totalPRs || 0}
+                    />
+                    <StatBattle
+                      label="Issues"
+                      icon={CircleDot}
+                      valueA={d1.stats.totalIssues || 0}
+                      valueB={d2.stats.totalIssues || 0}
+                    />
+                  </div>
+                </div>
+
+                {/* Coding Habits Showdown */}
+                <CodingHabitShowdown user1={d1} user2={d2} />
+
+                {/* Code Volume Showdown */}
+                <CodeVolumeShowdown user1={d1} user2={d2} />
+
+                {/* Developer Skills Radar */}
+                <DeveloperSkillsRadar user1={d1} user2={d2} />
+
+                {/* Language Comparison */}
+                <LanguageComparison
+                  langsA={d1.languages}
+                  langsB={d2.languages}
+                  nameA={d1.profile.username}
+                  nameB={d2.profile.username}
+                />
+
+                {/* Activity Heatmaps */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {[d1, d2].map((user) => (
+                  {[
+                    { user: d1, side: 'left' as const },
+                    { user: d2, side: 'right' as const },
+                  ].map(({ user, side }) => (
                     <motion.div
-                      key={user.profile.username}
+                      key={side}
                       initial={{ opacity: 0, y: 12 }}
                       whileInView={{ opacity: 1, y: 0 }}
                       viewport={{ once: true }}
-                      className="rounded-xl overflow-hidden border border-black/10 dark:border-[rgba(255,255,255,0.08)] bg-white dark:bg-[#0a0a0a]"
+                      className="p-5 rounded-xl bg-white dark:bg-[#0a0a0a] border border-black/10 dark:border-[rgba(255,255,255,0.08)]"
                     >
-                      <div className="p-3 border-b border-black/5 dark:border-white/5">
-                        <span className="text-xs font-medium text-[#A1A1AA]">
-                          @{user.profile.username}
-                        </span>
-                      </div>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={`${BASE_URL}/api/streak?user=${encodeURIComponent(user.profile.username)}&theme=neon`}
-                        alt={`${user.profile.username}'s CommitPulse monolith`}
-                        className="w-full"
-                        loading="lazy"
-                      />
+                      <h3 className="text-xs text-[#A1A1AA] uppercase tracking-widest font-medium mb-3">
+                        {user.profile.username}&apos;s Activity (Last 13 Weeks)
+                      </h3>
+                      <MiniHeatmap activity={user.activity} />
                     </motion.div>
                   ))}
                 </div>
+
+                {/* 3D Monolith Embeds */}
+                <div>
+                  <h2 className="text-xs text-[#A1A1AA] uppercase tracking-widest font-medium mb-4">
+                    3D Monolith Comparison
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {[d1, d2].map((user) => (
+                      <motion.div
+                        key={user.profile.username}
+                        initial={{ opacity: 0, y: 12 }}
+                        whileInView={{ opacity: 1, y: 0 }}
+                        viewport={{ once: true }}
+                        className="rounded-xl overflow-hidden border border-black/10 dark:border-[rgba(255,255,255,0.08)] bg-white dark:bg-[#0a0a0a]"
+                      >
+                        <div className="p-3 border-b border-black/5 dark:border-white/5">
+                          <span className="text-xs font-medium text-[#A1A1AA]">
+                            @{user.profile.username}
+                          </span>
+                        </div>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`${BASE_URL}/api/streak?user=${encodeURIComponent(user.profile.username)}&theme=neon`}
+                          alt={`${user.profile.username}'s CommitPulse monolith`}
+                          className="w-full"
+                          loading="lazy"
+                        />
+                      </motion.div>
+                    ))}
+                  </div>
+                </div>
               </div>
+
+              {/* Floating Share Button */}
+              <motion.div
+                initial={{ opacity: 0, y: 50 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ type: 'spring', bounce: 0.5, delay: 1 }}
+                className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50"
+              >
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleDownloadCard}
+                  disabled={isExporting}
+                  className="flex items-center gap-3 px-6 py-4 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold shadow-[0_0_30px_rgba(16,185,129,0.5)] transition-colors overflow-hidden relative group"
+                >
+                  <motion.div
+                    animate={isExporting ? { rotate: 360 } : {}}
+                    transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+                  >
+                    {isExporting ? <Loader2 size={20} /> : <Camera size={20} />}
+                  </motion.div>
+                  <span>{isExporting ? 'Generating Epic Card...' : 'Export Wrapped Card'}</span>
+
+                  {/* Subtle glare effect on hover */}
+                  <div className="absolute top-0 -inset-full h-full w-1/2 z-5 block transform -skew-x-12 bg-gradient-to-r from-transparent to-white opacity-20 group-hover:animate-shine" />
+                </motion.button>
+              </motion.div>
+
+              {/* Fullscreen Scanner Overlay during export */}
+              <AnimatePresence>
+                {isExporting && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-none"
+                  >
+                    <motion.div
+                      animate={{ y: ['-100%', '100%'] }}
+                      transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
+                      className="w-full max-w-4xl h-1 bg-emerald-500 shadow-[0_0_20px_4px_rgba(16,185,129,0.5)] rounded-full opacity-70"
+                    />
+                    <p className="mt-8 text-xl font-bold text-white tracking-widest uppercase">
+                      Capturing the Showdown...
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           )}
         </AnimatePresence>
