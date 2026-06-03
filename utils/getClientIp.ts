@@ -3,9 +3,23 @@ import { GetClientIpOptions } from '../types/network';
 import { isTrustedProxy, loadTrustedProxyConfig } from './trustedProxy';
 
 /**
+ * Tracks recently logged wildcard events to prevent I/O flooding
+ * and event-loop blocking during massive concurrent load.
+ */
+const recentLogsCache = new Set<string>();
+
+/**
  * Logs security-relevant events such as spoofing attempts in a structured format.
  */
 function logSecurityEvent(event: string, details: Record<string, unknown>) {
+  // Simple deduplication key to stop massive test suites from freezing the runner
+  const cacheKey = `${event}:${details.resolvedIp || ''}`;
+  if (recentLogsCache.has(cacheKey)) return;
+
+  recentLogsCache.add(cacheKey);
+  // Automatically clear the cache entry after a short window to keep memory footprint minimal
+  setTimeout(() => recentLogsCache.delete(cacheKey), 5000).unref?.();
+
   console.warn(
     JSON.stringify({
       timestamp: new Date().toISOString(),
@@ -67,20 +81,17 @@ export function getClientIp(
       }
 
       // If all proxies are trusted via wildcard
-      // Wildcard should NOT bypass IP validation
-      // It only disables proxy filtering, not header trust
-
       if (config.trustedProxies.includes('*')) {
-        // Still choose safest option: rightmost IP (origin-most-remote)
-        const lastIp = ips[ips.length - 1];
+        // When trusting ALL proxies via wildcard, the true client IP is the leftmost entry (ips[0])
+        const clientIp = ips[0];
 
         logSecurityEvent('WILDCARD_TRUST_USED', {
-          resolvedIp: lastIp,
+          resolvedIp: clientIp,
           chain: ips,
           header: 'x-forwarded-for',
         });
 
-        return lastIp;
+        return clientIp;
       }
 
       // Traverse from right to left (most recent to oldest proxy hop)
