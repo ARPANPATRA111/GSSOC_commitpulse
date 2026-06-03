@@ -898,6 +898,7 @@ export type OrgDashboardData = {
     totalContributions: number;
   };
   calendar: ContributionCalendar;
+  repoContributions: RepoContribution[];
   isPartial: boolean;
 };
 
@@ -929,13 +930,19 @@ export async function getOrgDashboardData(
   const fetchOptions = { ...options, signal: controller.signal };
 
   let calendars: ContributionCalendar[] = [];
+  const repoContributions: RepoContribution[] = [];
   try {
     // Fetch calendars for all members concurrently with capped concurrency to avoid 429s/timeouts
     calendars = (
       await runCappedConcurrency(activeMembers, 5, (member) => {
         if (controller.signal.aborted) return Promise.resolve(null);
         return fetchGitHubContributions(member, fetchOptions)
-          .then((data) => data.calendar)
+          .then((data) => {
+            if (data.repoContributions) {
+              repoContributions.push(...data.repoContributions);
+            }
+            return data.calendar;
+          })
           .catch(() => null);
       })
     ).filter((c: ContributionCalendar | null) => c !== null) as ContributionCalendar[];
@@ -971,6 +978,7 @@ export async function getOrgDashboardData(
       totalContributions: streakStats.totalContributions,
     },
     calendar: aggregatedCalendar,
+    repoContributions,
     isPartial,
   };
 }
