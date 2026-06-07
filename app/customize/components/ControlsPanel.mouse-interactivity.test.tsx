@@ -1,7 +1,8 @@
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { themes } from '../../../lib/svg/themes';
 import { ControlsPanel } from './ControlsPanel';
 
 const defaultProps = {
@@ -33,53 +34,54 @@ const defaultProps = {
 const renderPanel = (props: Partial<ComponentProps<typeof ControlsPanel>> = {}) =>
   render(<ControlsPanel {...defaultProps} {...props} />);
 
-describe('ControlsPanel - Interactive Tooltips, Cursor Hovers & Touch Event Propagation', () => {
+const getElementById = <T extends HTMLElement>(id: string): T => {
+  const element = document.getElementById(id);
+
+  expect(element).not.toBeNull();
+
+  return element as T;
+};
+
+describe('ControlsPanel mouse and touch interactivity', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('triggers mouseenter hover gestures on active segmented controls without changing selection', () => {
-    renderPanel({ scale: 'linear' });
-    const linearButton = screen.getByRole('button', { name: 'Linear' });
-    const hoverSpy = vi.fn();
-
-    linearButton.addEventListener('mouseenter', hoverSpy);
-    fireEvent.mouseEnter(linearButton);
-
-    expect(hoverSpy).toHaveBeenCalledTimes(1);
-    expect(linearButton).toHaveClass('bg-emerald-500/15', 'border', 'text-emerald-700');
-    expect(defaultProps.onScaleChange).not.toHaveBeenCalled();
-  });
-
-  it('exposes native tooltip labels at stable computed coordinates for color swatches', () => {
-    renderPanel({ theme: 'neon' });
-    const accentSwatch = screen.getByTitle(/^accent:/i);
-
-    vi.spyOn(accentSwatch, 'getBoundingClientRect').mockReturnValue({
-      x: 144,
-      y: 88,
-      width: 20,
-      height: 20,
-      top: 88,
-      right: 164,
-      bottom: 108,
-      left: 144,
-      toJSON: () => ({}),
-    } as DOMRect);
-
-    fireEvent.mouseEnter(accentSwatch);
-    const rect = accentSwatch.getBoundingClientRect();
-
-    expect(accentSwatch).toHaveAttribute('title', expect.stringMatching(/^accent: #[0-9a-f]+$/i));
-    expect(rect.left).toBe(144);
-    expect(rect.top).toBe(88);
-    expect(accentSwatch).toHaveClass('w-5', 'h-5', 'rounded-md');
-  });
-
-  it('propagates custom click and touch gestures from controls to the panel boundary', () => {
+  it('keeps scale hover passive and changes scale only when a real segmented control is clicked', () => {
     const onScaleChange = vi.fn();
+
+    renderPanel({ onScaleChange, scale: 'linear' });
+
+    const linearButton = screen.getByRole('button', { name: 'Linear' });
+    const logButton = screen.getByRole('button', { name: 'Logarithmic' });
+
+    fireEvent.mouseEnter(logButton);
+
+    expect(onScaleChange).not.toHaveBeenCalled();
+    expect(linearButton).toHaveClass('bg-emerald-500/15', 'text-emerald-700');
+    expect(logButton).toHaveClass('hover:bg-gray-200/70', 'dark:hover:text-white/70');
+
+    fireEvent.click(logButton);
+
+    expect(onScaleChange).toHaveBeenCalledWith('log');
+  });
+
+  it('renders native tooltip titles and colors for the selected theme swatches', () => {
+    renderPanel({ theme: 'neon' });
+
+    const bgSwatch = screen.getByTitle(`bg: #${themes.neon.bg}`);
+    const accentSwatch = screen.getByTitle(`accent: #${themes.neon.accent}`);
+    const textSwatch = screen.getByTitle(`text: #${themes.neon.text}`);
+
+    expect(bgSwatch).toHaveStyle({ backgroundColor: `#${themes.neon.bg}` });
+    expect(accentSwatch).toHaveStyle({ backgroundColor: `#${themes.neon.accent}` });
+    expect(textSwatch).toHaveStyle({ backgroundColor: `#${themes.neon.text}` });
+  });
+
+  it('routes click and touch events through the actual scale button', () => {
     const onBoundaryClick = vi.fn();
     const onBoundaryTouchStart = vi.fn();
+    const onScaleChange = vi.fn();
 
     render(
       <div onClick={onBoundaryClick} onTouchStart={onBoundaryTouchStart}>
@@ -88,6 +90,7 @@ describe('ControlsPanel - Interactive Tooltips, Cursor Hovers & Touch Event Prop
     );
 
     const logButton = screen.getByRole('button', { name: 'Logarithmic' });
+
     fireEvent.touchStart(logButton);
     fireEvent.click(logButton);
 
@@ -96,28 +99,61 @@ describe('ControlsPanel - Interactive Tooltips, Cursor Hovers & Touch Event Prop
     expect(onScaleChange).toHaveBeenCalledWith('log');
   });
 
-  it('applies pointer cursor affordances to hoverable select and color-picker targets', () => {
+  it('exposes pointer affordances on real select, color-picker, and shuffle controls', () => {
     renderPanel({ bgHex: '101820', accentHex: '00ffaa', textHex: 'ffffff' });
 
-    const themeSelect = document.getElementById('theme-select');
+    const themeSelect = getElementById<HTMLSelectElement>('theme-select');
     const colorPickerInput = screen.getByLabelText('Color picker for Background');
     const colorPickerSurface = colorPickerInput.closest('label');
+    const shuffleButton = screen.getByRole('button', { name: /shuffle/i });
 
     expect(themeSelect).toHaveClass('cursor-pointer');
     expect(colorPickerInput).toHaveClass('cursor-pointer');
     expect(colorPickerSurface).toHaveClass('cursor-pointer', 'hover:border-emerald-500/50');
+    expect(shuffleButton).toHaveAttribute('title', 'Pick a random theme');
   });
 
-  it('hides temporary disabled-theme overlay text after mouseleave and theme reset rerender', () => {
+  it('disables and restores custom color controls based on the real theme prop', () => {
     const { rerender } = renderPanel({ theme: 'random' });
-    const randomSwatch = screen.getByTitle(/^Random accent sample 1:/);
+
+    expect(screen.getByText(/changes on each load/i)).toBeInTheDocument();
+    expect(screen.getByText(/Random changes on every page load/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Color picker for Background')).not.toBeInTheDocument();
+
+    const themeSection = screen.getByText('Theme Preset').closest('div');
+
+    expect(themeSection).not.toBeNull();
+    fireEvent.mouseLeave(themeSection!);
 
     expect(screen.getByText(/Random changes on every page load/i)).toBeInTheDocument();
 
-    fireEvent.mouseLeave(randomSwatch);
     rerender(<ControlsPanel {...defaultProps} theme="dark" />);
 
     expect(screen.queryByText(/Random changes on every page load/i)).not.toBeInTheDocument();
-    expect(screen.getByTitle(/^bg:/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Color picker for Background')).toBeInTheDocument();
+  });
+
+  it('updates real form controls when users interact with selects, inputs, and sliders', () => {
+    const onThemeChange = vi.fn();
+    const onBgHexChange = vi.fn();
+    const onRadiusChange = vi.fn();
+
+    renderPanel({ onBgHexChange, onRadiusChange, onThemeChange });
+
+    fireEvent.change(getElementById<HTMLSelectElement>('theme-select'), {
+      target: { value: 'ocean' },
+    });
+    fireEvent.change(screen.getByLabelText('Color picker for Background'), {
+      target: { value: '#123abc' },
+    });
+
+    const radiusGroup = screen.getByText('Border Radius').closest('div');
+    const radiusSlider = within(radiusGroup!).getByRole('slider');
+
+    fireEvent.change(radiusSlider, { target: { value: '24' } });
+
+    expect(onThemeChange).toHaveBeenCalledWith('ocean');
+    expect(onBgHexChange).toHaveBeenCalledWith('123abc');
+    expect(onRadiusChange).toHaveBeenCalledWith(24);
   });
 });
