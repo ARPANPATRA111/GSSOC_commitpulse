@@ -49,18 +49,18 @@ interface TranslationContextType {
 
 const TranslationContext = createContext<TranslationContextType | null>(null);
 
-const getNestedValue = (obj: Record<string, unknown> | null | undefined, path: string): string => {
-  if (!obj) return path;
+const getNestedValue = (obj: Record<string, unknown> | null | undefined, path: string): unknown => {
+  if (!obj) return undefined;
   const parts = path.split('.');
   let current: unknown = obj;
   for (const part of parts) {
     if (current && typeof current === 'object' && part in (current as Record<string, unknown>)) {
       current = (current as Record<string, unknown>)[part];
     } else {
-      return path;
+      return undefined;
     }
   }
-  return typeof current === 'string' ? current : path;
+  return current;
 };
 
 export function TranslationProvider({ children }: { children: ReactNode }) {
