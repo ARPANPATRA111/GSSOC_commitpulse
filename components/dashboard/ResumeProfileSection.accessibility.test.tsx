@@ -112,7 +112,7 @@ describe('ResumeProfileSection – accessibility', () => {
 
     // Advance to the "uploaded" stage so preview-form buttons are rendered.
     const user = userEvent.setup();
-    await userEvent.click(uploadButton);
+    await user.click(uploadButton);
 
     const backButton = screen.getByRole('button', { name: /back/i });
     const saveButton = screen.getByRole('button', { name: /save profile/i });
@@ -134,7 +134,8 @@ describe('ResumeProfileSection – accessibility', () => {
 
     // Tab once – focus should land on the upload button.
     await user.tab();
-    expect(document.activeElement).toHaveAccessibleName(/upload resume file/i);
+    const uploadButton = screen.getByRole('button', { name: /upload resume file/i });
+    expect(document.activeElement).toBe(uploadButton);
 
     // Activate it to advance to the preview stage.
     await user.click(uploadButton);
@@ -155,6 +156,7 @@ describe('ResumeProfileSection – accessibility', () => {
     saveButton.focus();
 
     expect(document.activeElement).toBe(saveButton);
+  });
 
   /**
    * Test 3 — Tooltip / Supplementary Description Accessibility
@@ -182,12 +184,14 @@ describe('ResumeProfileSection – accessibility', () => {
     const uploadButton = screen.getByRole('button', { name: /upload resume file/i });
     await userEvent.click(uploadButton);
 
-    const { container: updatedContainer } = render(<ResumeProfileSection githubUsername="janesmith" />);
+    const { container: updatedContainer } = render(
+      <ResumeProfileSection githubUsername="janesmith" />
+    );
     const elementsAfterUpload = updatedContainer.querySelectorAll('[aria-describedby]');
     elementsAfterUpload.forEach((el) => {
       const ids = el.getAttribute('aria-describedby')!.split(/\s+/).filter(Boolean);
       ids.forEach((id) => {
-        const target = container.querySelector(`#${CSS.escape(id)}`);
+        const target = updatedContainer.querySelector(`#${CSS.escape(id)}`);
         expect(target).not.toBeNull();
       });
     });
@@ -209,7 +213,7 @@ describe('ResumeProfileSection – accessibility', () => {
     expect(idleHeadings.length).toBeGreaterThanOrEqual(1);
 
     // The visible section label heading must be present.
-    expect(screen.getAllByRole('heading')lenght).toBeGreaterThan(0);
+    expect(screen.getAllByRole('heading').length).toBeGreaterThan(0);
 
     // Validate that heading levels in the rendered DOM don't skip (e.g. h1→h3).
     const headingLevels = idleHeadings
@@ -257,11 +261,6 @@ describe('ResumeProfileSection – accessibility', () => {
     const backButton = screen.getByRole('button', { name: /back/i });
     const saveButton = screen.getByRole('button', { name: /save profile/i });
 
-    // "Back" must appear before "Save Profile" in DOM order.
-    const backIndex = focusOrder.indexOf(backButton);
-    const saveIndex = focusOrder.indexOf(saveButton);
-    expect(backIndex).toBeLessThan(saveIndex);
-   
     // Tab through all focusable elements; collect the sequence of active elements.
     const focusOrder: Element[] = [];
     for (let i = 0; i < 10; i++) {
