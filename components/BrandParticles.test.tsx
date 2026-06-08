@@ -27,16 +27,12 @@ const ForwardedMotionDiv = React.forwardRef<HTMLDivElement, MotionDivProps>(
 
 ForwardedMotionDiv.displayName = 'MotionDiv';
 
-// 2. Define the mock object BEFORE calling vi.mock()
-const mockMotion = {
-  div: ForwardedMotionDiv,
-};
-
-// 3. Now the hoisted mock factory function can safely read mockMotion
 vi.mock('framer-motion', () => ({
-  motion: mockMotion,
-  useReducedMotion: () => mockReducedMotion,
-  AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  motion: {
+    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+  },
+  useReducedMotion: () => false,
+  AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 describe('BrandParticles Component', () => {
