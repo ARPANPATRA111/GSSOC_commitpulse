@@ -4,10 +4,26 @@ import { syncQueue } from '../../lib/syncQueue';
 // Cache is considered stale and candidate for background refresh after 10 minutes
 const STALE_THRESHOLD_MS = 10 * 60 * 1000;
 
+// Lock expires automatically after 5 minutes
+const LOCK_TTL_MS = 5 * 60 * 1000;
+
+type GlobalWithLocks = typeof globalThis & {
+  __backgroundRefreshLocks?: Map<
+    string,
+    {
+      expiresAt: number;
+    }
+  >;
+};
+
+const globalLocks =
+  (globalThis as GlobalWithLocks).__backgroundRefreshLocks ??
+  new Map<string, { expiresAt: number }>();
+
+(globalThis as GlobalWithLocks).__backgroundRefreshLocks = globalLocks;
+
 export class BackgroundRefresh {
   private static instance: BackgroundRefresh;
-
-  private activeJobs = new Set<string>();
 
   private constructor() {}
 
@@ -15,6 +31,7 @@ export class BackgroundRefresh {
     if (!BackgroundRefresh.instance) {
       BackgroundRefresh.instance = new BackgroundRefresh();
     }
+
     return BackgroundRefresh.instance;
   }
 
@@ -26,7 +43,9 @@ export class BackgroundRefresh {
 
     try {
       const lastSyncTime = new Date(lastSyncedAt).getTime();
+
       if (isNaN(lastSyncTime)) return true;
+
       return Date.now() - lastSyncTime > STALE_THRESHOLD_MS;
     } catch {
       return true;
@@ -34,17 +53,53 @@ export class BackgroundRefresh {
   }
 
   /**
-   * Triggers an asynchronous, non-blocking cache backfill for the given username.
+   * Generates normalized lock key.
    */
-  public triggerRefresh(username: string): Promise<void> {
-    const sanitized = username.trim().toLowerCase();
+  private createLockKey(username: string): string {
+    return username.trim().toLowerCase();
+  }
 
-    // Avoid duplicate background jobs for the same user concurrently
-    if (this.activeJobs.has(sanitized)) {
-      return Promise.resolve();
+  /**
+   * Attempts to acquire refresh lock.
+   */
+  private acquireLock(username: string): boolean {
+    const key = this.createLockKey(username);
+
+    const existing = globalLocks.get(key);
+
+    if (existing && existing.expiresAt > Date.now()) {
+      return false;
     }
 
-    this.activeJobs.add(sanitized);
+    globalLocks.set(key, {
+      expiresAt: Date.now() + LOCK_TTL_MS,
+    });
+
+    return true;
+  }
+
+  /**
+   * Releases refresh lock.
+   */
+  private releaseLock(username: string): void {
+    const key = this.createLockKey(username);
+
+    globalLocks.delete(key);
+  }
+
+  /**
+   * Triggers asynchronous cache refresh.
+   */
+  public async triggerRefresh(username: string): Promise<void> {
+    const sanitized = username.trim().toLowerCase();
+
+    const acquired = this.acquireLock(sanitized);
+
+    if (!acquired) {
+      console.info(`[BackgroundRefresh] Refresh already active for: ${sanitized}`);
+
+      return;
+    }
 
     console.info(`[BackgroundRefresh] Queuing background refresh for: ${sanitized}`);
 
@@ -58,7 +113,7 @@ export class BackgroundRefresh {
         } catch (err) {
           console.error(`[BackgroundRefresh] Background refresh failed for: ${sanitized}`, err);
         } finally {
-          this.activeJobs.delete(sanitized);
+          this.releaseLock(sanitized);
           resolve();
         }
       });
@@ -66,19 +121,34 @@ export class BackgroundRefresh {
   }
 
   /**
-   * Returns whether a background job is currently active for a username.
+   * Returns whether a job is active.
    */
   public isJobActive(username: string): boolean {
-    return this.activeJobs.has(username.trim().toLowerCase());
+    const key = this.createLockKey(username);
+
+    const existing = globalLocks.get(key);
+
+    if (!existing) {
+      return false;
+    }
+
+    if (existing.expiresAt <= Date.now()) {
+      globalLocks.delete(key);
+
+      return false;
+    }
+
+    return true;
   }
 
   /**
-   * Resets active jobs.
+   * Clears locks.
    */
   public reset(): void {
-    this.activeJobs.clear();
+    globalLocks.clear();
   }
 }
 
 export const backgroundRefresh = BackgroundRefresh.getInstance();
+
 export default backgroundRefresh;
