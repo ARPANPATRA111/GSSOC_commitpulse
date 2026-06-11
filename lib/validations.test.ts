@@ -1555,13 +1555,11 @@ describe('streakParamsSchema — gradient_stops DoS protection', () => {
 
 describe('streakParamsSchema — date query validation boundaries (Variation 2)', () => {
   it('rejects the invalid date "2026-15-40" and returns an error containing \'Invalid "date" format\'', () => {
-    // Arrange: month 15 and day 40 are both out of range — clearly not ISO 8601
     const result = streakParamsSchema.safeParse({
       user: 'octocat',
       date: '2026-15-40',
     });
 
-    // Assert: schema must reject malformed date
     expect(result.success).toBe(false);
     if (!result.success) {
       const messages = result.error.issues.map((i) => i.message).join(' ');
@@ -1676,40 +1674,42 @@ describe('toGraceValue and toOpacityValue — consistent parseFloat behavior', (
   });
 });
 
-describe('streakParamsSchema — user maxLength boundary (Variation 2)', () => {
-  it('rejects a user value of "a".repeat(40) and returns an error containing "cannot exceed 39 characters"', () => {
+describe('streakParamsSchema — user maxLength boundary (Variation 5)', () => {
+  it('rejects a user parameter of exactly 40 characters with a 400-style error containing "cannot exceed 39 characters"', () => {
     const result = streakParamsSchema.safeParse({ user: 'a'.repeat(40) });
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      const errorMessages = result.error.issues.map((i) => i.message);
-      expect(errorMessages.some((m) => m.includes('cannot exceed 39 characters'))).toBe(true);
+      const message = result.error.issues[0]?.message ?? '';
+      expect(message).toContain('cannot exceed 39 characters');
     }
   });
 
-  it('accepts the boundary-length username of exactly 39 characters', () => {
+  it('accepts a username of exactly 39 characters (boundary value)', () => {
     const result = streakParamsSchema.safeParse({ user: 'a'.repeat(39) });
 
     expect(result.success).toBe(true);
   });
 
-  it('returns fieldErrors.user for a username exceeding the maxLength constraint', () => {
+  it('rejects a username longer than 39 characters even when the format is otherwise valid', () => {
+    const result = streakParamsSchema.safeParse({ user: 'b'.repeat(40) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const message = result.error.issues[0]?.message ?? '';
+      expect(message).toContain('cannot exceed 39 characters');
+    }
+  });
+
+  it('returns a structured Zod error with fieldErrors.user pointing to the maxLength violation', () => {
     const result = streakParamsSchema.safeParse({ user: 'a'.repeat(40) });
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      const flat = result.error.flatten().fieldErrors;
-      expect(flat.user).toBeDefined();
-      expect(flat.user?.join(' ')).toContain('cannot exceed 39 characters');
+      const flatErrors = result.error.flatten().fieldErrors;
+      expect(flatErrors.user).toBeDefined();
+      expect(flatErrors.user?.[0]).toContain('cannot exceed 39 characters');
     }
-  });
-
-  it('rejects any username longer than 39 characters regardless of character composition', () => {
-    const result = streakParamsSchema.safeParse({
-      user: 'valid-user-name-that-is-way-too-long-abc',
-    });
-
-    expect(result.success).toBe(false);
   });
 });
 
