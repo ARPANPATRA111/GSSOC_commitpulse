@@ -1,6 +1,4 @@
-// app/contributors/page.mouse-interactivity.test.tsx
-
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
@@ -21,8 +19,31 @@ vi.mock('./ContributorsClient', () => ({
 }));
 
 describe('ContributorsPage Mouse Interactivity', () => {
+  let originalFetch: typeof global.fetch;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [
+        {
+          id: 1,
+          login: 'contributor-1',
+          avatar_url: 'https://avatar.url',
+          contributions: 10,
+          html_url: 'https://html.url',
+        },
+      ],
+      headers: {
+        get: () => null,
+      },
+    } as unknown as Response);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
   });
 
   it('renders the interactive client layer successfully', async () => {

@@ -262,11 +262,15 @@ describe('CompareClient Mouse Interactivity & Touch Events', () => {
     });
 
     // Find custom heatmap items having 'contributions' in the title attribute
-    const allCells = document.querySelectorAll('[title*="contributions"]');
-    expect(allCells.length).toBeGreaterThan(0);
+    let allCells: NodeListOf<Element> | undefined;
+    await waitFor(() => {
+      const cells = document.querySelectorAll('[title*="contributions"]');
+      expect(cells.length).toBeGreaterThan(0);
+      allCells = cells;
+    });
 
     // Verify hover details on a heatmap cell
-    const sampleCell = allCells[0];
+    const sampleCell = allCells![0];
     expect(sampleCell).toHaveAttribute('title');
     expect(sampleCell.getAttribute('title')).toContain('contributions');
 
