@@ -227,6 +227,10 @@ Explore some of the built-in CommitPulse themes and quickly copy the style you l
 
 ![](https://commitpulse.vercel.app/api/streak?user=jhasourav07&lang=hi)
 
+<!-- Render labels in Portuguese -->
+
+![](https://commitpulse.vercel.app/api/streak?user=jhasourav07&lang=pt)
+
 <!-- Render labels in Simplified Chinese -->
 
 ![](https://commitpulse.vercel.app/api/streak?user=jhasourav07&lang=zh)
